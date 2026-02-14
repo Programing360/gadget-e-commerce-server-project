@@ -2,11 +2,20 @@ const express = require("express");
 const cors = require("cors");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const app = express();
+const jwt = require("jsonwebtoken");
+const cookieParser = require("cookie-parser");
 require("dotenv").config();
 const PORT = process.env.PORT || 5000;
 // middlewares
-app.use(cors());
+app.use(cookieParser());
 app.use(express.json());
+
+app.use(
+  cors({
+    origin: "http://localhost:5173",
+    credentials: true,
+  }),
+);
 {
   /* RGm7scBdFkBLHQnw */
 }
@@ -29,10 +38,52 @@ async function run() {
   const orderCollection = database.collection("UserOrderStore");
   const confirmOrderCollection = database.collection("ConfirmOrderList");
   const orderCancelCollection = database.collection("orderCancel");
+  const notificationCollection = database.collection("notificationCollection");
 
   try {
     // Connect the client to the server	(optional starting in v4.7)
     await client.connect();
+
+    // JWT token verification middleware
+    app.post("/jwt", async (req, res) => {
+      const { email } = req.body;
+
+      if (!email) {
+        return res.status(400).send({ message: "Email required" });
+      }
+
+      const user = { email };
+      const token = jwt.sign(user, process.env.JWT_ACCESS, {
+        expiresIn: process.env.JWT_EXPIRES_IN,
+      });
+
+      res
+        .cookie("token", token, {
+          httpOnly: true,
+          secure: true, // true in production
+          sameSite: "none",
+          maxAge: 24 * 60 * 60 * 1000,
+        })
+        .send({ success: true });
+    });
+
+    const verifyToken = (req, res, next) => {
+      const token = req.cookies?.token;
+      if (!token) {
+        return res.status(401).send({ message: "Unauthorized access" });
+      }
+
+      jwt.verify(token, process.env.JWT_ACCESS, (err, decoded) => {
+        if (err) {
+          return res.status(401).send({ message: "Unauthorized access" });
+        }
+        req.decoded = decoded;
+
+        next();
+      });
+    };
+
+    // console.log(verifyToken)
 
     app.get("/allproducts", async (req, res) => {
       const result = await productCollection.find().toArray();
@@ -54,6 +105,15 @@ async function run() {
       const result = await productCollection.insertOne(data);
       res.send(result);
     });
+
+    app.delete("/allProduct/:id", verifyToken, async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      // console.log(query)
+      const result = await productCollection.deleteOne(query);
+      res.send(result);
+    });
+
     // add and get Wish list cart section--------
 
     app.get("/wishListGet", async (req, res) => {
@@ -67,60 +127,109 @@ async function run() {
       res.send(result);
     });
 
-    app.delete("/wishListDelete/:id", async (req, res) => {
+    app.delete("/wishListDelete/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const result = await wishListCollection.deleteOne(query);
       res.send(result);
     });
 
+    // notification
+    app.get("/notifications", verifyToken, async (req, res) => {
+      const notifications = await notificationCollection
+        .find()
+        .sort({ createdAt: -1 })
+        .toArray();
+
+      res.send(notifications);
+    });
+
+    app.get("/notifications/unread-count", verifyToken, async (req, res) => {
+      const count = await notificationCollection.countDocuments({
+        isRead: false,
+      });
+
+      res.send({ count });
+    });
+
+    app.patch("/notifications/read-all", verifyToken, async (req, res) => {
+      await notificationCollection.updateMany(
+        { isRead: false },
+        { $set: { isRead: true } },
+      );
+
+      res.send({ success: true });
+    });
+
     // order cart-----
 
-    app.get("/orders", async (req, res) => {
+    app.get("/orders", verifyToken, async (req, res) => {
       const result = await orderCollection.find().toArray();
       res.send(result);
     });
 
-    app.get("/orderConfirm", async (req, res) => {
+    app.get("/orderConfirm", verifyToken, async (req, res) => {
       const result = await confirmOrderCollection.find().toArray();
       res.send(result);
     });
 
     app.post("/orders", async (req, res) => {
       const userOrderInfo = req.body;
-      const result = await orderCollection.insertOne(userOrderInfo);
+      let result = await orderCollection.insertOne(userOrderInfo);
+      // 🔔 notification create
+
+      try {
+        await notificationCollection.insertOne({
+          type: "order",
+          orderId: result.insertedId, // ✅ correct
+          message: "New order received",
+          isRead: false,
+          createdAt: new Date().toISOString(),
+        });
+      } catch {
+        console.log(error);
+      }
+
       res.send(result);
     });
 
-    app.post("/orderConfirm", async (req, res) => {
-      const orderConfirmItem = req.body;
-      // console.log(orderConfirmItem);
-      const result = await confirmOrderCollection.insertOne(orderConfirmItem);
-      res.send(result);
-    });
-
-    app.delete("/orderConfirm/:id", async (req, res) => {
+    app.post("/orderConfirm/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
-
+      const query = { _id: new ObjectId(id) };
+      const result = await confirmOrderCollection.insertOne(query);
+      res.send(result);
+    });
+    
+    app.delete("/orderDelete/:id", verifyToken, async (req, res) => {
+      const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const result = await orderCollection.deleteOne(query);
       res.send(result);
     });
 
     // order cancel---------------
-    app.get('/orderCancelList', async(req, res) => {
-      const result = await orderCancelCollection.find().toArray()
-      res.send(result)
-    })
-    app.post('/orderCancel', async (req, res) => {
+    app.get("/orderCancelList", verifyToken, async (req, res) => {
+      const result = await orderCancelCollection.find().toArray();
+      res.send(result);
+    });
+    app.post("/orderCancel", verifyToken, async (req, res) => {
       const data = req.body;
-      const result = await orderCancelCollection.insertOne(data)
-      res.send(result)
-    })
+      const result = await orderCancelCollection.insertOne(data);
+      res.send(result);
+    });
+
+    app.delete("/deleteOrderCancel/:id", verifyToken, async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await orderCancelCollection.deleteOne(query);
+      res.send(result);
+    });
 
     // cart data receive-----------
 
     app.get("/cartData", async (req, res) => {
+      // const email = req.query.email;
+
       const result = await cartCollection.find().toArray();
       res.send(result);
     });
