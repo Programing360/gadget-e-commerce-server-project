@@ -89,6 +89,25 @@ async function run() {
       const result = await productCollection.find().toArray();
       res.send(result);
     });
+    // GET All Products (with optional category filter)
+
+    app.get("/allProducts", async (req, res) => {
+      try {
+        const category = req.query.category;
+
+        let query = {};
+
+        if (category) {
+          query.category = category;
+        }
+
+        const result = await productCollection.find(query).toArray();
+        res.send(result);
+      } catch (error) {
+        console.log(error);
+        res.status(500).send({ error: "Server error" });
+      }
+    });
 
     app.get("/allProduct/:id", async (req, res) => {
       const id = req.params.id;
@@ -199,7 +218,24 @@ async function run() {
       const result = await confirmOrderCollection.insertOne(query);
       res.send(result);
     });
-    
+
+    app.patch("/updateOrderStatus/:id", verifyToken, async (req, res) => {
+      const id = req.params.id;
+
+      const filter = { _id: new ObjectId(id) };
+
+      const updatedDoc = {
+        $set: {
+          orderStatus: "delivered",
+          deliveredAt: new Date(),
+        },
+      };
+
+      const result = await confirmOrderCollection.updateOne(filter, updatedDoc);
+
+      res.send(result);
+    });
+
     app.delete("/orderDelete/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
